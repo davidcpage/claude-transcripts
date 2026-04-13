@@ -26,7 +26,6 @@ ANNOTATED_DIR = CLAUDE_BASE / "annotated-sessions"
 _SERVE_DIR: Path | None = None
 _MODE: str = "annotated"  # "annotated" | "raw" | "dir"
 _ALLOWED_DIRS: list[str] = []
-_INDEX_HTML: bytes = b""
 
 
 def _read_annotation(filepath: Path):
@@ -217,11 +216,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if path in ("/", "/index.html"):
+            body = _load_index_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(_INDEX_HTML)))
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(_INDEX_HTML)
+            self.wfile.write(body)
             return
 
         self.send_error(404, "Not found")
@@ -236,9 +236,7 @@ def _load_index_html() -> bytes:
 
 def run_server(port: int = 8080, raw: bool = False, directory: Path | None = None):
     """Start the viewer HTTP server. Blocks until interrupted."""
-    global _SERVE_DIR, _MODE, _ALLOWED_DIRS, _INDEX_HTML
-
-    _INDEX_HTML = _load_index_html()
+    global _SERVE_DIR, _MODE, _ALLOWED_DIRS
 
     if raw and directory:
         raise ValueError("--raw and --dir are mutually exclusive")

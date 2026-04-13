@@ -31,6 +31,28 @@
     p { margin-block-end: 0; }
     .wrap { max-width: 1024px; margin: 0 auto; padding: 28px 80px 100vh 16px; min-height: 100vh; display: flex; flex-direction: column; }
     .title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .top-bar .back-link { margin-bottom: 0; }
+    .export-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      flex-shrink: 0;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .export-btn:hover { background: #f9fafb; color: var(--text); border-color: #cbd5e1; }
+    .export-btn:disabled { opacity: 0.5; cursor: default; }
     .session-footer {
       font-size: 11px;
       color: #9ca3af;
@@ -606,6 +628,41 @@
       }
     }
 
+    // Client-side twin of export.py: fetch the pristine template, inject the
+    // current session as window.INLINE_SESSION before the existing <script>
+    // block, and trigger a download. The "</" escape mirrors export.py so a
+    // literal close-script tag inside session text can't close the outer one.
+    async function exportStandalone(text, filename, button) {
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Exporting\u2026';
+      try {
+        const r = await fetch(location.href, { cache: 'no-store' });
+        if (!r.ok) throw new Error('template fetch failed: ' + r.status);
+        let html = await r.text();
+        const marker = '  <script>\n  (function() {';
+        if (!html.includes(marker)) throw new Error('injection marker not found');
+        const encoded = JSON.stringify({ text, filename }).replace(/<\//g, '<\\/');
+        const injection = `  <script>window.INLINE_SESSION = ${encoded};<\/script>\n`;
+        html = html.replace(marker, injection + marker);
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (filename.replace(/\.jsonl$/i, '') || 'session') + '.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Export failed:', err);
+        alert('Export failed: ' + err.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+
     // Standalone mode: session data and optional annotation are inlined into
     // the HTML via window.INLINE_SESSION. Skip the landing page and render
     // immediately without touching the server.
@@ -905,7 +962,10 @@
       // Build HTML
       let html = '';
       if (!window.INLINE_SESSION) {
+        html += `<div class="top-bar">`;
         html += `<a class="back-link" onclick="showLanding()">\u2190</a>`;
+        html += `<button class="export-btn" type="button" title="Download as a self-contained HTML file">Export</button>`;
+        html += `</div>`;
       }
       const displayTitle = (annotation && annotation.title) || meta.slug || filename;
       html += `<h1 class="title">${esc(displayTitle)}</h1>`;
@@ -1162,6 +1222,11 @@
       html += `<div class="session-footer">${footerParts.map(p => `<span>${p}</span>`).join('<span class="sep">·</span>')}</div>`;
 
       sessionView.innerHTML = html;
+
+      const exportButton = sessionView.querySelector('.export-btn');
+      if (exportButton) {
+        exportButton.addEventListener('click', () => exportStandalone(text, filename, exportButton));
+      }
 
       // Clamp scroll: the more permissive of (a) last visible turn at viewport top
       // (so it highlights in the token rail) or (b) footer at viewport bottom
