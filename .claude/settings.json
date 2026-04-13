@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 .claude/agents/annotate.py:*)",
+      "Bash(echo:*)",
+      "Read(//tmp/claude-transcripts/**)"
+    ]
+  }
+}

@@ -1,0 +1,1408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Code Session Viewer</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --user: #f3f4f6;
+      --assistant: #eaf8ef;
+      --thinking: #fff7ed;
+      --tool: #eaf4ff;
+      --tok-thinking: #fde68a;
+      --tok-assistant: #86efac;
+      --tok-user: #d1d5db;
+      --tok-tool: #93c5fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+    strong { font-weight: 700; }
+    p { margin-block-end: 0; }
+    .wrap { max-width: 1024px; margin: 0 auto; padding: 28px 80px 100vh 16px; min-height: 100vh; display: flex; flex-direction: column; }
+    .title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .session-footer {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      line-height: 1.6;
+    }
+    .session-footer span { white-space: nowrap; }
+    .session-footer .sep { margin: 0 4px; }
+    .context-chart {
+      margin: 32px 0 8px;
+    }
+    .context-chart svg {
+      width: 100%;
+      display: block;
+    }
+    .context-chart-stats {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 6px;
+    }
+    .block {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 0 0 12px;
+      white-space: pre-wrap;
+    }
+    .user { background: var(--user); }
+    .assistant { background: var(--assistant); }
+    .thinking { background: var(--thinking); }
+    .tool { background: var(--tool); }
+    .top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    .label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .when { font-size: 11px; color: var(--muted); text-align: right; white-space: nowrap; }
+    .when span { margin-left: 6px; color: #9ca3af; }
+    .meta { font-size: 11px; color: var(--muted); margin: -4px 0 8px; }
+    .sub { font-size: 11px; color: var(--muted); margin: 8px 0 6px; }
+    .subrow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .subrow .when { font-size: 10px; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+    .code, .output {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      border: 1px solid #1f2937;
+      overflow-x: auto;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      white-space: pre;
+    }
+    .usage {
+      margin: 10px 0 6px;
+      font-size: 12px;
+      color: #4b5563;
+      text-align: center;
+    }
+    details.collapsed > summary {
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      user-select: none;
+    }
+    details.collapsed > pre { margin-top: 8px; }
+    #token-rail {
+      position: fixed;
+      top: 0;
+      right: 16px;
+      width: 48px;
+      height: 100vh;
+      background: #ffffff;
+      border-left: 1px solid var(--border);
+      overflow: hidden;
+      z-index: 20;
+      display: none;
+    }
+    #token-rail .rail-sections {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 2px 0;
+    }
+    #token-rail .rail-divider {
+      flex-shrink: 0;
+      height: 14px;
+      font-size: 7px;
+      line-height: 14px;
+      color: #6d28d9;
+      padding: 0 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: #ffffff;
+      border-top: 1px solid #ede9fe;
+      cursor: default;
+    }
+    #token-rail .rail-divider:first-child { border-top: none; }
+    #token-rail .rail-section-wrap {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      min-height: 2px;
+    }
+    #token-rail .rail-band {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      position: relative;
+      cursor: pointer;
+      border-radius: 3px;
+      overflow: hidden;
+      transition: opacity 0.15s;
+      min-height: 2px;
+    }
+    #token-rail .rail-band.collapsed { background: #ede9fe; opacity: 0.45; }
+    #token-rail .rail-band.collapsed.active-band { opacity: 0.85; background: #ddd6fe; }
+    #token-rail .rail-band.expanded { opacity: 1; }
+    #token-rail .band-seg {
+      display: block;
+      width: 100%;
+      min-height: 0;
+      border: 0; padding: 0; margin: 0;
+      cursor: pointer;
+    }
+    #token-rail .rail-band.expanded .band-seg { opacity: 0.5; transition: opacity 0.1s; }
+    #token-rail .rail-band.expanded .band-seg.active-seg { opacity: 1; }
+    #token-rail .rail-band.collapsed .band-seg { visibility: hidden; }
+    #token-rail .band-seg.thinking { background: var(--tok-thinking); }
+    #token-rail .band-seg.assistant { background: var(--tok-assistant); }
+    #token-rail .band-seg.user { background: var(--tok-user); }
+    #token-rail .band-seg.tool { background: var(--tok-tool); }
+    #token-rail .band-seg + .band-seg { border-top: 1px solid #ffffff; }
+    #token-rail .band-turn-line {
+      position: absolute;
+      left: 4px; right: 4px;
+      height: 1px;
+      background: rgba(0,0,0,0.15);
+      pointer-events: none;
+    }
+    #token-rail .rail-band.collapsed .band-turn-line { display: none; }
+    #rail-tooltip {
+      position: fixed;
+      z-index: 40;
+      max-width: 320px;
+      padding: 6px 10px;
+      border: 1px solid rgba(148,163,184,0.65);
+      border-radius: 6px;
+      background: rgba(248,250,252,0.97);
+      color: #0f172a;
+      box-shadow: 0 4px 12px rgba(15,23,42,0.14);
+      font-size: 11px;
+      line-height: 1.35;
+      pointer-events: none;
+      white-space: pre-wrap;
+      display: none;
+    }
+    @media (max-width: 960px) {
+      .wrap { padding-right: 74px; }
+      #token-rail { width: 42px; }
+    }
+    em { font-style: italic; }
+
+    /* Landing page */
+    #landing {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    .landing-header {
+      margin-bottom: 24px;
+    }
+    .landing-header h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 16px;
+    }
+    .landing-search {
+      margin-bottom: 4px;
+    }
+    .landing-search input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      background: white;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .landing-search input:focus {
+      border-color: #93c5fd;
+    }
+    .search-hint {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 12px;
+    }
+    .search-hint code {
+      background: #f3f4f6;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+    }
+    .landing-count {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .landing-empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 60px 20px;
+      font-size: 14px;
+    }
+    .session-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: border-color 0.1s, box-shadow 0.1s;
+    }
+    .session-card:hover {
+      border-color: #93c5fd;
+      box-shadow: 0 1px 4px rgba(59, 130, 246, 0.08);
+    }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      margin: 0;
+      line-height: 1.3;
+    }
+    .card-date {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .card-preview {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-bottom: 4px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+    .card-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .card-meta .clickable {
+      cursor: pointer;
+      border-radius: 3px;
+      padding: 0 2px;
+      margin: 0 -2px;
+      transition: color 0.1s;
+    }
+    .card-meta .clickable:hover {
+      color: #3b82f6;
+    }
+    .card-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+    }
+    .card-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      background: #f3f4f6;
+      border-radius: 10px;
+      font-size: 11px;
+      color: #6b7280;
+      cursor: pointer;
+    }
+    .card-tag:hover { background: #e5e7eb; }
+    .card-sections {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #3b82f6;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    /* Annotation: collapsible sections */
+    .section-group {
+      margin: 16px 0 0;
+      border: none;
+    }
+    .section-group > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+    .section-group > summary::-webkit-details-marker { display: none; }
+    .section-divider {
+      padding: 10px 14px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      border-radius: 8px;
+      transition: background 0.1s;
+    }
+    .section-divider:hover { background: #f9fafb; }
+    .section-divider .section-chevron {
+      font-size: 11px;
+      color: #9ca3af;
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+    .section-group[open] .section-chevron { transform: rotate(90deg); }
+    .section-divider .section-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #6366f1;
+      margin: 0;
+    }
+    .section-divider .section-summary {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.4;
+    }
+    .section-divider .section-text { flex: 1; }
+    .section-divider .section-text .section-summary { margin-top: 2px; }
+    .section-stats {
+      font-size: 11px;
+      color: #9ca3af;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .section-content {
+      padding: 16px 0 8px 0;
+      margin-left: 4px;
+      border-left: 2px solid #e9d5ff;
+      padding-left: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div id="landing">
+    <div class="landing-header">
+      <h1>Claude Code Sessions</h1>
+      <div class="landing-search">
+        <input type="text" id="search-input" placeholder="Search sessions..." />
+      </div>
+      <div class="search-hint">
+        <code>author:</code> <code>project:</code> <code>after:</code> <code>before:</code>
+      </div>
+      <div class="landing-count" id="session-count"></div>
+    </div>
+    <div id="session-cards"></div>
+  </div>
+
+  <aside id="token-rail" aria-label="Token usage map"></aside>
+  <div id="rail-tooltip" aria-hidden="true"></div>
+  <main class="wrap" id="session-view"></main>
+
+  <script>
+  (function() {
+    const landing = document.getElementById('landing');
+    const sessionView = document.getElementById('session-view');
+    const rail = document.getElementById('token-rail');
+    const tooltip = document.getElementById('rail-tooltip');
+    const searchInput = document.getElementById('search-input');
+    const sessionCount = document.getElementById('session-count');
+    const sessionCards = document.getElementById('session-cards');
+
+    // Single scroll clamp handler — maxScrollY is updated by renderSession
+    window._maxScrollY = Infinity;
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > window._maxScrollY) window.scrollTo({ top: window._maxScrollY });
+    }, { passive: false });
+
+    // --- Session data ---
+    let allSessions = [];
+    let serverMode = false;
+
+    window.showLanding = function() {
+      sessionView.style.display = 'none';
+      sessionView.innerHTML = '';
+      rail.style.display = 'none';
+      rail.innerHTML = '';
+      tooltip.style.display = 'none';
+      landing.style.display = '';
+      window._maxScrollY = Infinity;
+      window.scrollTo({ top: 0 });
+    };
+
+    // --- Data loading: try server API first, fall back to sessions.json ---
+    async function loadSessionList() {
+      try {
+        const r = await fetch('/api/sessions');
+        const data = await r.json();
+        serverMode = true;
+        allSessions = data.sessions || [];
+      } catch {
+        try {
+          const r = await fetch('sessions.json');
+          const data = await r.json();
+          allSessions = data.sessions || [];
+          serverMode = false;
+        } catch {
+          allSessions = [];
+        }
+      }
+      renderCards();
+    }
+
+    // --- Parse search query into operators + free text ---
+    function parseQuery(raw) {
+      const operators = {};
+      // Match operator:value, operator:"quoted value", or bare operator: (empty value)
+      const opRe = /\b(author|project|after|before):(\"[^\"]*\"|[^\s]*)/gi;
+      const freeText = raw.replace(opRe, (_, key, val) => {
+        operators[key.toLowerCase()] = val.replace(/^"|"$/g, '');
+        return '';
+      }).trim().toLowerCase();
+      return { operators, freeText };
+    }
+
+    // --- Filter sessions ---
+    function getFilteredSessions() {
+      const { operators, freeText } = parseQuery(searchInput.value);
+      return allSessions.filter(s => {
+        // Empty operator values are no-ops (show everything while typing)
+        if (operators.author) {
+          if (!s.author || !s.author.toLowerCase().includes(operators.author.toLowerCase())) return false;
+        }
+        if (operators.project) {
+          if (!s.project || !s.project.toLowerCase().includes(operators.project.toLowerCase())) return false;
+        }
+        if (operators.after) {
+          if (!s.date || s.date < operators.after) return false;
+        }
+        if (operators.before) {
+          if (!s.date || s.date > operators.before) return false;
+        }
+        if (freeText) {
+          const hay = [s.title, s.author, s.project, s.slug, s.preview || '', ...(s.tags || [])].join(' ').toLowerCase();
+          if (!hay.includes(freeText)) return false;
+        }
+        return true;
+      });
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr + 'T00:00:00');
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      } catch { return dateStr; }
+    }
+
+    // --- Insert an operator into the search bar ---
+    function insertSearch(operator, value) {
+      const current = searchInput.value;
+      // Remove any existing operator of the same type
+      const cleaned = current.replace(new RegExp(`\\b${operator}:(\"[^\"]*\"|[^\\s]+)`, 'gi'), '').trim();
+      // Quote values with spaces
+      const quoted = value.includes(' ') ? `"${value}"` : value;
+      searchInput.value = cleaned ? `${operator}:${quoted} ${cleaned}` : `${operator}:${quoted}`;
+      renderCards();
+      searchInput.focus();
+    }
+
+    function renderCards() {
+      const filtered = getFilteredSessions();
+      sessionCount.textContent = `${filtered.length} session${filtered.length !== 1 ? 's' : ''}`;
+
+      if (filtered.length === 0) {
+        sessionCards.innerHTML = allSessions.length === 0
+          ? '<div class="landing-empty">No sessions available</div>'
+          : '<div class="landing-empty">No sessions match your search</div>';
+        return;
+      }
+
+      let html = '';
+      for (const s of filtered) {
+        html += `<div class="session-card" data-file="${esc(s.file)}">`;
+        html += `<div class="card-top">`;
+        html += `<div class="card-title">${esc(s.title)}</div>`;
+        html += `<div class="card-date">${formatDate(s.date)}</div>`;
+        html += `</div>`;
+        if (s.preview) html += `<div class="card-preview">${esc(s.preview)}</div>`;
+        const metaParts = [];
+        if (s.author) metaParts.push(`<span class="clickable" data-op="author" data-val="${esc(s.author)}">${esc(s.author)}</span>`);
+        if (s.project) metaParts.push(`<span class="clickable" data-op="project" data-val="${esc(s.project)}">${esc(s.project)}</span>`);
+        if (metaParts.length) html += `<div class="card-meta">${metaParts.join(' \u00b7 ')}</div>`;
+        if ((s.tags && s.tags.length) || s.sections) {
+          html += `<div class="card-tags">`;
+          for (const tag of (s.tags || [])) {
+            html += `<span class="card-tag" data-tag="${esc(tag)}">${esc(tag)}</span>`;
+          }
+          if (s.sections) html += `<span class="card-sections">${s.sections} section${s.sections !== 1 ? 's' : ''}</span>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+      }
+      sessionCards.innerHTML = html;
+
+      // Card click handlers
+      sessionCards.querySelectorAll('.session-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          // Clicking author/project inserts search operator
+          const clickable = e.target.closest('.clickable');
+          if (clickable) {
+            e.stopPropagation();
+            insertSearch(clickable.dataset.op, clickable.dataset.val);
+            return;
+          }
+          // Clicking tag inserts as free text
+          if (e.target.classList.contains('card-tag')) {
+            e.stopPropagation();
+            const tag = e.target.dataset.tag;
+            if (!searchInput.value.includes(tag)) {
+              searchInput.value = searchInput.value ? `${searchInput.value} ${tag}` : tag;
+              renderCards();
+              searchInput.focus();
+            }
+            return;
+          }
+          loadSession(card.dataset.file);
+        });
+      });
+    }
+
+    // --- Load a session file ---
+    async function loadSession(filePath) {
+      try {
+        let url;
+        if (serverMode) {
+          url = '/api/session?path=' + encodeURIComponent(filePath);
+        } else {
+          url = filePath;
+        }
+        const r = await fetch(url);
+        const text = await r.text();
+        renderSession(text, filePath.split('/').pop());
+      } catch (err) {
+        console.error('Failed to load session:', err);
+      }
+    }
+
+    searchInput.addEventListener('input', renderCards);
+    loadSessionList();
+
+    // --- JSONL Parser ---
+    function parseSession(text) {
+      const lines = text.trim().split('\n');
+      const events = [];
+      for (const line of lines) {
+        try { events.push(JSON.parse(line)); } catch(e) { continue; }
+      }
+      return events;
+    }
+
+    // --- Extract annotation lines from parsed events ---
+    function extractAnnotation(events) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].type === 'annotation') return events[i];
+      }
+      return null;
+    }
+
+    // --- Merge assistant messages by message.id ---
+    function mergeEvents(events) {
+      const merged = [];
+      for (const ev of events) {
+        if (ev.type === 'file-history-snapshot' || ev.type === 'progress' || ev.type === 'annotation') continue;
+        const msg = ev.message;
+        if (!msg) continue;
+
+        if (ev.type === 'assistant' && msg.id) {
+          const last = merged.length > 0 ? merged[merged.length - 1] : null;
+          if (last && last.type === 'assistant' && last.message && last.message.id === msg.id) {
+            const newContent = Array.isArray(msg.content) ? msg.content : [];
+            if (!Array.isArray(last.message.content)) last.message.content = [];
+            last.message.content.push(...newContent);
+            if (msg.usage) last.message.usage = msg.usage;
+            if (msg.stop_reason) last.message.stop_reason = msg.stop_reason;
+            last.timestamp = ev.timestamp || last.timestamp;
+            if (ev.slug) last.slug = ev.slug;
+            continue;
+          }
+        }
+
+        merged.push({
+          type: ev.type,
+          message: msg ? { ...msg, content: Array.isArray(msg.content) ? [...msg.content] : msg.content } : undefined,
+          timestamp: ev.timestamp,
+          slug: ev.slug,
+          sessionId: ev.sessionId,
+          cwd: ev.cwd,
+          toolUseResult: ev.toolUseResult,
+          version: ev.version
+        });
+      }
+      return merged;
+    }
+
+    // --- Build display entries ---
+    function buildEntries(merged) {
+      const entries = [];
+      let id = 0;
+      const toolMap = {};
+
+      for (let ti = 0; ti < merged.length; ti++) {
+        const ev = merged[ti];
+        const msg = ev.message;
+        if (!msg) continue;
+
+        if (msg.role === 'user') {
+          if (typeof msg.content === 'string') {
+            entries.push({ id: ++id, type: 'user', text: msg.content, timestamp: ev.timestamp, turnIndex: ti });
+          } else if (Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (block.type === 'tool_result') {
+                const idx = toolMap[block.tool_use_id];
+                if (idx !== undefined) {
+                  let resultText = '';
+                  if (typeof block.content === 'string') {
+                    resultText = block.content;
+                  } else if (Array.isArray(block.content)) {
+                    resultText = block.content.filter(c => typeof c === 'string' || c.type === 'text')
+                      .map(c => typeof c === 'string' ? c : c.text || '').join('\n');
+                    if (!resultText) resultText = JSON.stringify(block.content, null, 2);
+                  }
+                  entries[idx].result = resultText;
+                  entries[idx].resultTimestamp = ev.timestamp;
+                  entries[idx].isError = block.is_error;
+                  if (ev.toolUseResult) entries[idx].toolUseResult = ev.toolUseResult;
+                } else {
+                  // Orphaned tool result - show as info
+                }
+              } else if (block.type === 'text' && block.text) {
+                entries.push({ id: ++id, type: 'user', text: block.text, timestamp: ev.timestamp, turnIndex: ti });
+              }
+            }
+          }
+        } else if (msg.role === 'assistant') {
+          const content = Array.isArray(msg.content) ? msg.content : [];
+          for (const block of content) {
+            if (block.type === 'thinking' && block.thinking) {
+              entries.push({
+                id: ++id, type: 'thinking', text: block.thinking,
+                timestamp: ev.timestamp, model: msg.model, msgId: msg.id, usage: msg.usage, turnIndex: ti
+              });
+            } else if (block.type === 'text' && block.text) {
+              entries.push({
+                id: ++id, type: 'assistant', text: block.text,
+                timestamp: ev.timestamp, model: msg.model, msgId: msg.id, usage: msg.usage, turnIndex: ti
+              });
+            } else if (block.type === 'tool_use') {
+              const entry = {
+                id: ++id, type: 'tool_call', toolName: block.name || 'unknown',
+                input: block.input || {}, toolUseId: block.id,
+                timestamp: ev.timestamp, model: msg.model, msgId: msg.id, usage: msg.usage, turnIndex: ti
+              };
+              entries.push(entry);
+              toolMap[block.id] = entries.length - 1;
+            }
+          }
+        }
+      }
+      return entries;
+    }
+
+    // --- Session metadata ---
+    function extractMeta(events, merged) {
+      let model = '', slug = '', cwd = '', sessionId = '', version = '';
+      let firstTs = null, lastTs = null;
+
+      // Deduplicate usage by message.id - keep last (most complete) per response
+      const usageByMsgId = {};
+      for (const ev of events) {
+        if (ev.timestamp) {
+          const t = new Date(ev.timestamp);
+          if (!firstTs || t < firstTs) firstTs = t;
+          if (!lastTs || t > lastTs) lastTs = t;
+        }
+        if (ev.slug && !slug) slug = ev.slug;
+        if (ev.cwd && !cwd) cwd = ev.cwd;
+        if (ev.sessionId && !sessionId) sessionId = ev.sessionId;
+        if (ev.version && !version) version = ev.version;
+        const msg = ev.message;
+        if (msg) {
+          if (msg.model && !model) model = msg.model;
+          if (msg.usage && msg.id) {
+            usageByMsgId[msg.id] = msg.usage;
+          }
+        }
+      }
+
+      let duration = '';
+      if (firstTs && lastTs) {
+        const ms = lastTs - firstTs;
+        const s = Math.floor(ms / 1000) % 60;
+        const m = Math.floor(ms / 60000) % 60;
+        const h = Math.floor(ms / 3600000);
+        duration = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      }
+
+      return { model, slug, cwd, sessionId, version, duration, firstTs, lastTs };
+    }
+
+    // --- Relative timestamp ---
+    function relTs(ts, firstTs) {
+      if (!ts || !firstTs) return '';
+      const ms = new Date(ts) - firstTs;
+      if (ms < 0) return '+00:00.000';
+      const totalSec = ms / 1000;
+      const m = Math.floor(totalSec / 60);
+      const s = Math.floor(totalSec % 60);
+      const frac = String(Math.floor(ms % 1000)).padStart(3, '0');
+      return `+${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${frac}`;
+    }
+
+    // --- HTML escaping ---
+    function esc(text) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // --- Simple markdown to HTML ---
+    function renderMd(text) {
+      let html = esc(text);
+      // Code blocks
+      const blocks = [];
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+        blocks.push(`</pre><div class="code">${code}</div><pre>`);
+        return `\x00B${blocks.length-1}\x00`;
+      });
+      // Inline code
+      html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+      // Bold
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      // Italic
+      html = html.replace(/(?<![*\w])\*([^*\n]+)\*(?![*\w])/g, '<em>$1</em>');
+      // Restore code blocks
+      html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[parseInt(i)]);
+      return html;
+    }
+
+    // --- Tool call display ---
+    function formatToolInput(name, input) {
+      if (name === 'Bash') {
+        return `<div class="sub">cmd</div><div class="code">${esc(input.command || '')}</div>`;
+      }
+      if (name === 'Read') {
+        return `<div class="sub">file</div><div class="code">${esc(input.file_path || '')}</div>`;
+      }
+      if (name === 'Write') {
+        let s = `<div class="sub">file</div><div class="code">${esc(input.file_path || '')}</div>`;
+        if (input.content) s += `<div class="sub">content</div><div class="code">${esc(input.content)}</div>`;
+        return s;
+      }
+      if (name === 'Edit') {
+        let s = `<div class="sub">file</div><div class="code">${esc(input.file_path || '')}</div>`;
+        if (input.old_string !== undefined) s += `<div class="sub">old</div><div class="code">${esc(input.old_string)}</div>`;
+        if (input.new_string !== undefined) s += `<div class="sub">new</div><div class="code">${esc(input.new_string)}</div>`;
+        return s;
+      }
+      if (name === 'Grep') {
+        let s = `<div class="sub">pattern</div><div class="code">${esc(input.pattern || '')}</div>`;
+        if (input.path) s += `<div class="sub">path</div><div class="code">${esc(input.path)}</div>`;
+        return s;
+      }
+      if (name === 'Glob') {
+        let s = `<div class="sub">pattern</div><div class="code">${esc(input.pattern || '')}</div>`;
+        if (input.path) s += `<div class="sub">path</div><div class="code">${esc(input.path)}</div>`;
+        return s;
+      }
+      if (name === 'WebFetch') {
+        let s = `<div class="sub">url</div><div class="code">${esc(input.url || '')}</div>`;
+        if (input.prompt) s += `<div class="sub">prompt</div><pre>${esc(input.prompt)}</pre>`;
+        return s;
+      }
+      if (name === 'WebSearch') {
+        return `<div class="sub">query</div><div class="code">${esc(input.query || '')}</div>`;
+      }
+      if (name === 'ToolSearch') {
+        return `<div class="sub">query</div><div class="code">${esc(input.query || '')}</div>`;
+      }
+      if (name === 'Agent') {
+        let s = '';
+        if (input.prompt) s += `<div class="sub">prompt</div><pre>${esc(input.prompt)}</pre>`;
+        return s;
+      }
+      // Generic
+      return `<div class="sub">input</div><div class="code">${esc(JSON.stringify(input, null, 2))}</div>`;
+    }
+
+    function formatToolResult(entry) {
+      if (!entry.result && !entry.toolUseResult) return '';
+      let text = entry.result || '';
+      if (!text && entry.toolUseResult) {
+        text = entry.toolUseResult.stdout || entry.toolUseResult.result || '';
+        if (entry.toolUseResult.stderr) text += '\n' + entry.toolUseResult.stderr;
+      }
+      if (!text) return '';
+      const lines = text.split('\n');
+      const isLong = lines.length > 30;
+      const resultTs = entry.resultTimestamp ? relTs(entry.resultTimestamp, window._firstTs) : '';
+      let html = `<div class="subrow"><div class="sub">output</div>`;
+      if (resultTs) html += `<div class="when"><span>${resultTs}</span></div>`;
+      html += `</div>`;
+      const label = isLong ? `${lines.length} lines` : `${text.length} chars`;
+      html += `<details><summary style="cursor:pointer;font-size:11px;color:var(--muted);margin-bottom:4px">${label} (click to expand)</summary><div class="output">${esc(text)}</div></details>`;
+      return html;
+    }
+
+    // --- Render session ---
+    function renderSession(text, filename) {
+      const events = parseSession(text);
+      const annotation = extractAnnotation(events);
+      const merged = mergeEvents(events);
+      const entries = buildEntries(merged);
+      const meta = extractMeta(events, merged);
+      window._firstTs = meta.firstTs;
+
+      landing.style.display = 'none';
+      sessionView.style.display = '';
+      rail.style.display = 'block';
+
+      // Build a set of turn indices where sections start, for inserting dividers
+      const sectionByTurn = {};
+      if (annotation && annotation.sections) {
+        for (const sec of annotation.sections) {
+          sectionByTurn[sec.start_index] = sec;
+        }
+      }
+
+      // Build HTML
+      let html = '';
+      html += `<a class="back-link" onclick="showLanding()">\u2190</a>`;
+      const displayTitle = (annotation && annotation.title) || meta.slug || filename;
+      html += `<h1 class="title">${esc(displayTitle)}</h1>`;
+
+      // Footer placeholder — filled after stats are computed
+
+      const segments = [];
+
+      // Determine which entry is the first for each msgId so we show usage there
+      const firstEntryForMsg = {};
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].msgId && !(entries[i].msgId in firstEntryForMsg)) firstEntryForMsg[entries[i].msgId] = i;
+      }
+      const seenMsgIds = new Set();
+
+      // Collect last usage per msgId and build ordered turn list for delta computation
+      const apiUsageByMsg = {};
+      const turnOrder = []; // ordered unique msgIds
+      for (const ev of events) {
+        const msg = ev.message;
+        if (msg && msg.id && msg.usage) {
+          if (!apiUsageByMsg[msg.id]) turnOrder.push(msg.id);
+          apiUsageByMsg[msg.id] = msg.usage;
+        }
+      }
+
+      // Pre-compute per-turn context size and input tokens (non-output context growth)
+      const turnCtx = {}; // msgId -> { cr, cc, total, inputTokens, contextBefore }
+      for (let ti = 0; ti < turnOrder.length; ti++) {
+        const mid = turnOrder[ti];
+        const u = apiUsageByMsg[mid] || {};
+        const cr = u.cache_read_input_tokens || 0;
+        const cc = u.cache_creation_input_tokens || 0;
+        const total = cr + cc;
+        // inputTokens = new non-output tokens added before this turn (user msgs, tool results, etc.)
+        // First turn: cc is new content (user msg etc.), cr is pre-existing cached context (system prompt)
+        let inputTokens = cc;
+        if (ti > 0) {
+          const prevMid = turnOrder[ti - 1];
+          const prevCtx = turnCtx[prevMid];
+          const prevOutput = (apiUsageByMsg[prevMid] || {}).output_tokens || 0;
+          inputTokens = Math.max(0, total - prevCtx.total - prevOutput);
+        }
+        const contextBefore = total - inputTokens;
+        turnCtx[mid] = { cr, cc, total, inputTokens, contextBefore };
+      }
+
+      // Pre-compute per-section stats (API turns, input/output tokens, context at start)
+      const sectionStats = {};
+      if (annotation && annotation.sections) {
+        const sortedSections = [...annotation.sections].sort((a, b) => a.start_index - b.start_index);
+        for (let si = 0; si < sortedSections.length; si++) {
+          const sec = sortedSections[si];
+          const nextStart = si < sortedSections.length - 1 ? sortedSections[si + 1].start_index : Infinity;
+          let inputTokens = 0, outputTokens = 0, contextAtStart = 0;
+          const seenMsgs = new Set();
+          let firstMsgFound = false;
+          for (const entry of entries) {
+            if (entry.turnIndex === undefined || !entry.msgId) continue;
+            if (entry.turnIndex < sec.start_index || entry.turnIndex >= nextStart) continue;
+            if (!seenMsgs.has(entry.msgId)) {
+              seenMsgs.add(entry.msgId);
+              const u = apiUsageByMsg[entry.msgId];
+              if (u) outputTokens += (u.output_tokens || 0);
+              const tc = turnCtx[entry.msgId];
+              if (tc) inputTokens += tc.inputTokens;
+              if (!firstMsgFound) {
+                firstMsgFound = true;
+                if (tc) contextAtStart = tc.contextBefore;
+              }
+            }
+          }
+          sectionStats[sec.start_index] = {
+            apiTurns: seenMsgs.size,
+            inputTokens,
+            outputTokens,
+            contextAtStart
+          };
+        }
+      }
+
+      const hasSections = annotation && annotation.sections && annotation.sections.length > 0;
+      const sectionsDone = new Set();
+      let inSection = false;
+      for (let ei = 0; ei < entries.length; ei++) {
+        const entry = entries[ei];
+        const ts = relTs(entry.timestamp, meta.firstTs);
+        const preview = (entry.text || '').slice(0, 120).replace(/\n/g, ' ');
+
+        // Insert collapsible section if this entry starts a new section
+        if (entry.turnIndex !== undefined && sectionByTurn[entry.turnIndex] && !sectionsDone.has(entry.turnIndex)) {
+          sectionsDone.add(entry.turnIndex);
+          if (inSection) html += `</div></details>`; // close previous section
+          const sec = sectionByTurn[entry.turnIndex];
+          const stats = sectionStats[sec.start_index] || {};
+          let statsText = '';
+          if (stats.apiTurns) {
+            const parts = [];
+            if (stats.contextAtStart) parts.push(`${stats.contextAtStart.toLocaleString()} ctx`);
+            parts.push(`${stats.apiTurns} turns`);
+            if (stats.inputTokens) parts.push(`${stats.inputTokens.toLocaleString()} in`);
+            if (stats.outputTokens) parts.push(`${stats.outputTokens.toLocaleString()} out`);
+            statsText = parts.join(' · ');
+          }
+          html += `<details class="section-group" id="section-${sec.start_index}">`;
+          html += `<summary><div class="section-divider">`;
+          html += `<span class="section-chevron">&#9654;</span>`;
+          html += `<div class="section-text"><div class="section-title">${esc(sec.title)}</div>`;
+          if (sec.summary) html += `<div class="section-summary">${esc(sec.summary)}</div>`;
+          html += `</div>`;
+          if (statsText) html += `<span class="section-stats">${statsText}</span>`;
+          html += `</div></summary>`;
+          html += `<div class="section-content">`;
+          inSection = true;
+        }
+
+        // Show usage before the first entry of each API response
+        if (entry.msgId && firstEntryForMsg[entry.msgId] === ei && !seenMsgIds.has(entry.msgId)) {
+          seenMsgIds.add(entry.msgId);
+          const apiUsage = apiUsageByMsg[entry.msgId] || {};
+          const turnOutput = apiUsage.output_tokens || 0;
+          const tc = turnCtx[entry.msgId] || {};
+
+          // Usage line: same format as section header (minus turns count)
+          const parts = [];
+          parts.push(`${(tc.contextBefore || 0).toLocaleString()} ctx`);
+          if (tc.inputTokens) parts.push(`${tc.inputTokens.toLocaleString()} in`);
+          parts.push(`${turnOutput.toLocaleString()} out`);
+          html += `<div class="usage">${parts.join(' · ')}</div>`;
+        }
+
+        if (entry.type === 'user') {
+          const isLong = entry.text.length > 500;
+          html += `<section class="block user" id="entry-${entry.id}">`;
+          html += `<div class="top"><div class="label">user</div><div class="when"><span>${ts}</span></div></div>`;
+          if (isLong) {
+            html += `<details class="collapsed" open><summary>user context (${entry.text.length} chars)</summary><pre>${renderMd(entry.text)}</pre></details>`;
+          } else {
+            html += `<pre>${renderMd(entry.text)}</pre>`;
+          }
+          html += `</section>`;
+          segments.push({ bucket: 'user', tokens: 0, weight: Math.max(1, Math.ceil(entry.text.length / 20)),
+            target: `entry-${entry.id}`, type: 'user', preview, turnIndex: entry.turnIndex });
+        }
+
+        else if (entry.type === 'thinking') {
+          html += `<section class="block thinking" id="entry-${entry.id}">`;
+          html += `<div class="top"><div class="label">thinking</div><div class="when"><span>${ts}</span></div></div>`;
+          if (entry.text.length > 300) {
+            html += `<details class="collapsed"><summary>expand thinking</summary><pre>${renderMd(entry.text)}</pre></details>`;
+          } else {
+            html += `<pre>${renderMd(entry.text)}</pre>`;
+          }
+          html += `</section>`;
+          segments.push({ bucket: 'thinking', tokens: 0, weight: Math.max(1, Math.ceil(entry.text.length / 20)),
+            target: `entry-${entry.id}`, type: 'thinking', preview, msgId: entry.msgId, turnIndex: entry.turnIndex });
+        }
+
+        else if (entry.type === 'assistant') {
+          html += `<section class="block assistant" id="entry-${entry.id}">`;
+          html += `<div class="top"><div class="label">assistant</div><div class="when"><span>${ts}</span></div></div>`;
+          html += `<pre>${renderMd(entry.text)}</pre>`;
+          html += `</section>`;
+          segments.push({ bucket: 'assistant', tokens: 0, weight: Math.max(1, Math.ceil(entry.text.length / 20)),
+            target: `entry-${entry.id}`, type: 'assistant', preview, msgId: entry.msgId, turnIndex: entry.turnIndex });
+        }
+
+        else if (entry.type === 'tool_call') {
+          html += `<section class="block tool" id="entry-${entry.id}">`;
+          html += `<div class="top"><div class="label">tool call: ${esc(entry.toolName)}</div><div class="when"><span>${ts}</span></div></div>`;
+          html += formatToolInput(entry.toolName, entry.input);
+          html += formatToolResult(entry);
+          html += `</section>`;
+          const resultLen = entry.result ? entry.result.length : 0;
+          const toolPreview = entry.toolName + ': ' + (entry.input.command || entry.input.file_path || entry.input.pattern || entry.input.query || entry.input.url || '').slice(0, 60);
+          segments.push({ bucket: 'tool', tokens: 0, weight: Math.max(1, Math.ceil((resultLen + 100) / 20)),
+            target: `entry-${entry.id}`, type: 'tool_call', tool_name: entry.toolName, preview: toolPreview, msgId: entry.msgId, turnIndex: entry.turnIndex });
+        }
+
+      }
+
+      // Close last section if open
+      if (inSection) html += `</div></details>`;
+
+      // Context growth chart — stacked area showing ctx/input/output per turn
+      if (turnOrder.length >= 2) {
+        const points = [];
+        for (let ti = 0; ti < turnOrder.length; ti++) {
+          const mid = turnOrder[ti];
+          const tc = turnCtx[mid];
+          const out = (apiUsageByMsg[mid] || {}).output_tokens || 0;
+          points.push({ ctx: tc.contextBefore, input: tc.inputTokens, output: out });
+        }
+        const n = points.length;
+        const peakTokens = Math.max(...points.map(p => p.ctx + p.input + p.output));
+        // Default 200k scale; if data exceeds it, expand in 200k increments
+        const yMax = Math.max(200000, Math.ceil(peakTokens / 200000) * 200000);
+        const labelW = 28;
+        const W = 800, H = 300, pad = { top: 4, bottom: 4, left: 0, right: labelW };
+        const plotW = W - pad.left - pad.right, plotH = H - pad.top - pad.bottom;
+        const stepW = plotW / (n - 1);
+
+        const x = (i) => pad.left + i * stepW;
+        const y = (tokens) => pad.top + plotH - (tokens / yMax) * plotH;
+        const baseline = pad.top + plotH;
+
+        // Grid lines at 50k intervals, only up to next 50k above peak data
+        const gridCeil = Math.ceil(peakTokens / 50000) * 50000;
+        let gridLines = '';
+        for (let g = 50000; g <= gridCeil; g += 50000) {
+          const gy = y(g);
+          gridLines += `<line x1="${pad.left}" y1="${gy}" x2="${W - pad.right}" y2="${gy}" stroke="#e5e7eb" stroke-width="0.5" stroke-dasharray="3,4"/>`;
+          gridLines += `<text x="${W - pad.right + 4}" y="${gy + 3}" font-size="9" font-family="inherit" fill="#d1d5db">${g/1000}k</text>`;
+        }
+
+        // Stacked area paths
+        let topCtx = '', topIn = '', topOut = '';
+        for (let i = 0; i < n; i++) {
+          const p = points[i], cx = x(i);
+          topCtx += `${i === 0 ? 'M' : 'L'}${cx},${y(p.ctx)}`;
+          topIn += `${i === 0 ? 'M' : 'L'}${cx},${y(p.ctx + p.input)}`;
+          topOut += `${i === 0 ? 'M' : 'L'}${cx},${y(p.ctx + p.input + p.output)}`;
+        }
+        const pathCtx = `${topCtx}L${x(n-1)},${baseline}L${x(0)},${baseline}Z`;
+        let pathInput = topIn;
+        for (let i = n - 1; i >= 0; i--) pathInput += `L${x(i)},${y(points[i].ctx)}`;
+        pathInput += 'Z';
+        let pathOutput = topOut;
+        for (let i = n - 1; i >= 0; i--) { const p = points[i]; pathOutput += `L${x(i)},${y(p.ctx + p.input)}`; }
+        pathOutput += 'Z';
+
+        // Summary stats as HTML
+        const totalIn = points.reduce((s, p) => s + p.input, 0);
+        const totalOut = points.reduce((s, p) => s + p.output, 0);
+
+        html += `<div class="context-chart">`;
+        html += `<svg viewBox="0 0 ${W} ${H}">`;
+        html += gridLines;
+        html += `<path d="${pathCtx}" fill="#e5e7eb" opacity="0.5"/>`;
+        html += `<path d="${pathInput}" fill="#93c5fd" opacity="0.6"/>`;
+        html += `<path d="${pathOutput}" fill="#c4b5fd" opacity="0.6"/>`;
+        html += `</svg>`;
+        html += `<div class="context-chart-stats">`;
+        html += `<span>${totalIn.toLocaleString()} in · ${totalOut.toLocaleString()} out</span>`;
+        html += `<span>${n} turns · peak ${peakTokens.toLocaleString()} ctx</span>`;
+        html += `</div></div>`;
+      }
+
+      // Page footer — model, version, duration, date
+      const footerParts = [];
+      if (meta.model) footerParts.push(esc(meta.model));
+      if (meta.version) footerParts.push('Claude Code ' + esc(meta.version));
+      if (meta.firstTs) footerParts.push(meta.firstTs.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }));
+      html += `<div class="session-footer">${footerParts.map(p => `<span>${p}</span>`).join('<span class="sep">·</span>')}</div>`;
+
+      sessionView.innerHTML = html;
+
+      // Clamp scroll: the more permissive of (a) last visible turn at viewport top
+      // (so it highlights in the token rail) or (b) footer at viewport bottom
+      // (so the context chart is reachable).
+      function getLastTurnTarget() {
+        // Last .usage inside an open section (or not inside any details)
+        const usageLines = sessionView.querySelectorAll('.usage');
+        for (let i = usageLines.length - 1; i >= 0; i--) {
+          const closedDetails = usageLines[i].closest('details:not([open])');
+          if (!closedDetails) return usageLines[i];
+        }
+        // All sections collapsed — target the last section header
+        const sections = sessionView.querySelectorAll('.section-group');
+        return sections.length ? sections[sections.length - 1] : null;
+      }
+      function updateMaxScroll() {
+        // (a) Last turn/section scrolled to viewport top
+        const turnTarget = getLastTurnTarget();
+        const turnScroll = turnTarget ? turnTarget.getBoundingClientRect().top + window.scrollY : 0;
+        // (b) Footer bottom aligned with viewport bottom
+        const footer = sessionView.querySelector('.session-footer');
+        const footerScroll = footer ? footer.getBoundingClientRect().bottom + window.scrollY - window.innerHeight : 0;
+        window._maxScrollY = Math.max(turnScroll, footerScroll) || Infinity;
+      }
+      updateMaxScroll();
+      sessionView.addEventListener('toggle', () => {
+        updateMaxScroll();
+        if (window.scrollY > window._maxScrollY) window.scrollTo({ top: window._maxScrollY });
+      }, true);
+
+      buildTokenRail(segments, entries, turnOrder, turnCtx, apiUsageByMsg, annotation);
+    }
+
+    // --- Token rail (section-oriented minimap) ---
+    function buildTokenRail(segments, entries, turnOrder, turnCtx, apiUsageByMsg, annotation) {
+      rail.innerHTML = '';
+      if (segments.length === 0) return;
+
+      const placeTip = (ev) => {
+        const x = ev.clientX || 0, y = ev.clientY || 0;
+        tooltip.style.right = (window.innerWidth - x + 12) + 'px';
+        tooltip.style.top = Math.min(y, window.innerHeight - 100) + 'px';
+        tooltip.style.left = 'auto';
+      };
+      const hideTip = () => { tooltip.style.display = 'none'; };
+
+      // Assign turn numbers to segments
+      let turnNum = 0;
+      let prevMsgId = null;
+      segments.forEach((seg) => {
+        if (seg.msgId && seg.msgId !== prevMsgId) {
+          if (prevMsgId !== null) turnNum++;
+        }
+        seg._turnNum = seg.msgId ? turnNum : null;
+        if (seg.msgId) prevMsgId = seg.msgId;
+      });
+
+      // Group segments into sections
+      const hasSections = annotation && annotation.sections && annotation.sections.length > 0;
+      let sectionDefs;
+      if (hasSections) {
+        sectionDefs = [...annotation.sections].sort((a, b) => a.start_index - b.start_index);
+      } else {
+        sectionDefs = [{ start_index: 0, title: '' }];
+      }
+
+      // Map each segment to a section, then collect segments per section
+      const sectionGroups = sectionDefs.map(() => ({ segs: [] }));
+      segments.forEach(seg => {
+        let si = 0;
+        if (seg.turnIndex !== undefined) {
+          for (let j = sectionDefs.length - 1; j >= 0; j--) {
+            if (seg.turnIndex >= sectionDefs[j].start_index) { si = j; break; }
+          }
+        }
+        sectionGroups[si].segs.push(seg);
+      });
+
+      // Build the rail
+      const container = document.createElement('div');
+      container.className = 'rail-sections';
+      rail.appendChild(container);
+
+      const segMap = []; // { targetId, segEl } for turn-level scrollspy
+      const bandMap = []; // { el, band } for section-level collapsed highlighting
+      let updateActive = null; // assigned after loop, called from click handlers via closure
+      let _clickBand = null;  // set during click-to-scroll, suppresses scroll handler race
+      let rafId = null;
+
+      sectionDefs.forEach((secDef, si) => {
+        const group = sectionGroups[si];
+        if (group.segs.length === 0) return;
+
+        const totalWeight = group.segs.reduce((s, seg) => s + seg.weight, 0);
+
+        // Wrapper is the flex child; band lives inside it
+        const wrap = document.createElement('div');
+        wrap.className = 'rail-section-wrap';
+        wrap.style.flexGrow = String(totalWeight);
+        wrap.style.flexBasis = '0';
+
+        const band = document.createElement('div');
+        band.className = 'rail-band';
+
+        // Determine initial state from the main-view <details>
+        const detailsEl = hasSections ? document.getElementById('section-' + secDef.start_index) : null;
+        const isExpanded = !detailsEl || detailsEl.open;
+        band.classList.add(isExpanded ? 'expanded' : 'collapsed');
+
+        // Section divider — placed before the band in the container, not inside it,
+        // so it has fixed opacity and mirrors the main view's section headers
+        if (secDef.title) {
+          const divider = document.createElement('div');
+          divider.className = 'rail-divider';
+          divider.textContent = secDef.title;
+          container.appendChild(divider);
+        }
+
+        // Inner colour segments
+        group.segs.forEach(seg => {
+          const el = document.createElement('div');
+          el.className = 'band-seg ' + seg.bucket;
+          el.style.flexGrow = String(seg.weight);
+          el.style.flexBasis = '0';
+
+          // Expanded: click scrolls to block, hover shows tooltip
+          el.addEventListener('click', (ev) => {
+            if (band.classList.contains('collapsed')) return; // let band handler deal with it
+            ev.stopPropagation();
+            const target = document.getElementById(seg.target);
+            if (target) window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - 16), behavior: 'auto' });
+          });
+          el.addEventListener('mouseenter', (ev) => {
+            if (band.classList.contains('collapsed')) return;
+            const tn = seg._turnNum !== null ? `Turn ${seg._turnNum} \u00b7 ` : '';
+            tooltip.textContent = tn + seg.type + '\n' + (seg.preview || '');
+            tooltip.style.display = 'block';
+            placeTip(ev);
+          });
+          el.addEventListener('mousemove', (ev) => {
+            if (!band.classList.contains('collapsed')) placeTip(ev);
+          });
+          el.addEventListener('mouseleave', hideTip);
+
+          band.appendChild(el);
+          segMap.push({ targetId: seg.target, segEl: el });
+        });
+
+        // Turn boundary lines (visible only when expanded, hidden by CSS when collapsed)
+        let prevTurnMsgId = null;
+        let cumWeight = 0;
+        group.segs.forEach(seg => {
+          if (seg.msgId && seg.msgId !== prevTurnMsgId && prevTurnMsgId !== null) {
+            const line = document.createElement('div');
+            line.className = 'band-turn-line';
+            line.style.top = ((cumWeight / totalWeight) * 100) + '%';
+            band.appendChild(line);
+          }
+          cumWeight += seg.weight;
+          if (seg.msgId) prevTurnMsgId = seg.msgId;
+        });
+
+        // Band-level: click scrolls to section header (does not expand)
+        band.addEventListener('click', () => {
+          const target = detailsEl || document.getElementById(group.segs[0].target);
+          _clickBand = band.classList.contains('collapsed') ? band : null;
+          if (target) {
+            window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - 16), behavior: 'auto' });
+          }
+          requestAnimationFrame(() => {
+            if (updateActive) updateActive();
+            _clickBand = null;
+          });
+        });
+        band.addEventListener('mouseenter', (ev) => {
+          if (band.classList.contains('collapsed') && secDef.title) {
+            tooltip.textContent = secDef.title;
+            tooltip.style.display = 'block';
+            placeTip(ev);
+          }
+        });
+        band.addEventListener('mousemove', (ev) => {
+          if (band.classList.contains('collapsed')) placeTip(ev);
+        });
+        band.addEventListener('mouseleave', () => {
+          if (band.classList.contains('collapsed')) hideTip();
+        });
+
+        // Sync with main-view section toggle
+        if (detailsEl) {
+          detailsEl.addEventListener('toggle', () => {
+            band.classList.toggle('expanded', detailsEl.open);
+            band.classList.toggle('collapsed', !detailsEl.open);
+          });
+        }
+
+        if (detailsEl) bandMap.push({ el: detailsEl, band });
+
+        wrap.appendChild(band);
+        container.appendChild(wrap);
+      });
+
+      // Scrollspy: highlight the turn currently at the top of the viewport,
+      // and highlight collapsed section bands when their header is at the top
+      if (segMap.length > 0) {
+        updateActive = () => {
+          // Turn-level: last visible entry with top <= 100.
+          // Default to first segment (covers scrolled-above-first-section).
+          let activeIdx = 0;
+          for (let i = segMap.length - 1; i >= 0; i--) {
+            const el = document.getElementById(segMap[i].targetId);
+            if (!el || el.offsetHeight === 0) continue;
+            if (el.getBoundingClientRect().top <= 100) { activeIdx = i; break; }
+          }
+          segMap.forEach(({ segEl }, i) => {
+            segEl.classList.toggle('active-seg', i === activeIdx);
+          });
+
+          // Band-level: if a click is pending, force-highlight that band.
+          // Otherwise use scrollspy: last section header with top <= 100.
+          let activeBandIdx = 0;
+          if (_clickBand) {
+            const idx = bandMap.findIndex(({ band: b }) => b === _clickBand);
+            if (idx >= 0) activeBandIdx = idx;
+          } else {
+            for (let i = bandMap.length - 1; i >= 0; i--) {
+              if (bandMap[i].el.getBoundingClientRect().top <= 100) {
+                activeBandIdx = i;
+                break;
+              }
+            }
+          }
+          bandMap.forEach(({ band: b }, i) => {
+            b.classList.toggle('active-band', i === activeBandIdx && b.classList.contains('collapsed'));
+          });
+        };
+        window.addEventListener('scroll', () => {
+          if (_clickBand) return; // click handler owns this cycle
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(() => { updateActive(); rafId = null; });
+        }, { passive: true });
+        updateActive();
+      }
+
+      // Wheel passthrough
+      rail.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        window.scrollBy({ top: ev.deltaY * 2.2, behavior: 'auto' });
+      }, { passive: false });
+    }
+  })();
+  </script>
+</body>
+</html>
