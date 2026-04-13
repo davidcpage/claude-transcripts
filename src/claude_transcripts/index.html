@@ -77,6 +77,8 @@
       color: #9ca3af;
       margin-top: 6px;
     }
+    .ctx-chart-section-hit { cursor: default; }
+    .ctx-chart-section-fill { transition: fill-opacity 0.1s; pointer-events: none; }
     .block {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -1152,6 +1154,7 @@
       if (inSection) html += `</div></details>`;
 
       // Context growth chart — stacked area showing ctx/input/output per turn
+      let chartSections = null;
       if (turnOrder.length >= 2) {
         const points = [];
         for (let ti = 0; ti < turnOrder.length; ti++) {
@@ -1202,12 +1205,101 @@
         const totalIn = points.reduce((s, p) => s + p.input, 0);
         const totalOut = points.reduce((s, p) => s + p.output, 0);
 
+        // Per-section hover overlays. annotation.start_index is a merged-event
+        // index (see buildEntries: turnIndex = ti over merged events), not a
+        // position in turnOrder. Map event-index -> chart turn position via
+        // entries that share msgIds with turnOrder.
+        const chartHasSections = annotation && annotation.sections && annotation.sections.length > 0;
+        if (chartHasSections) {
+          const turnPos = {};
+          for (let ti = 0; ti < turnOrder.length; ti++) turnPos[turnOrder[ti]] = ti;
+          const turnEventIdx = new Array(n).fill(Infinity);
+          for (const e of entries) {
+            if (e.msgId && turnPos[e.msgId] !== undefined) {
+              const tp = turnPos[e.msgId];
+              if (e.turnIndex < turnEventIdx[tp]) turnEventIdx[tp] = e.turnIndex;
+            }
+          }
+          // Forward-fill any unset slots so the lookup is monotonic
+          for (let ti = 1; ti < n; ti++) {
+            if (turnEventIdx[ti] === Infinity) turnEventIdx[ti] = turnEventIdx[ti - 1];
+          }
+
+          // Find the smallest chart-turn whose event-index >= target
+          const firstTurnAtOrAfter = (eventIdx) => {
+            for (let ti = 0; ti < n; ti++) {
+              if (turnEventIdx[ti] >= eventIdx) return ti;
+            }
+            return n; // past the end
+          };
+
+          const topAt = (ti) => {
+            const p = points[ti];
+            return y(p.ctx + p.input + p.output);
+          };
+          const interpTop = (xPos) => {
+            const tiF = (xPos - pad.left) / stepW;
+            const ti0 = Math.max(0, Math.min(n - 2, Math.floor(tiF)));
+            const t = Math.max(0, Math.min(1, tiF - ti0));
+            return topAt(ti0) * (1 - t) + topAt(ti0 + 1) * t;
+          };
+
+          const defs = [...annotation.sections].sort((a, b) => a.start_index - b.start_index);
+          chartSections = [];
+          for (let si = 0; si < defs.length; si++) {
+            const startTi = firstTurnAtOrAfter(defs[si].start_index);
+            if (startTi >= n) continue;
+            const nextStart = si + 1 < defs.length
+              ? firstTurnAtOrAfter(defs[si + 1].start_index)
+              : n;
+            const endTi = Math.min(n - 1, nextStart - 1);
+            if (endTi < startTi) continue;
+
+            let secIn = 0, secOut = 0, secPeak = 0;
+            for (let ti = startTi; ti <= endTi; ti++) {
+              const p = points[ti];
+              secIn += p.input;
+              secOut += p.output;
+              secPeak = Math.max(secPeak, p.ctx + p.input + p.output);
+            }
+            const xStart = startTi === 0 ? pad.left : (x(startTi - 1) + x(startTi)) / 2;
+            const xEnd = endTi === n - 1 ? W - pad.right : (x(endTi) + x(endTi + 1)) / 2;
+
+            // Polygon clipped to the stacked-area top
+            let d = `M${xStart},${baseline}L${xStart},${interpTop(xStart)}`;
+            for (let ti = startTi; ti <= endTi; ti++) {
+              d += `L${x(ti)},${topAt(ti)}`;
+            }
+            d += `L${xEnd},${interpTop(xEnd)}L${xEnd},${baseline}Z`;
+
+            chartSections.push({
+              title: defs[si].title || `Section ${si + 1}`,
+              turns: endTi - startTi + 1,
+              input: secIn,
+              output: secOut,
+              peak: secPeak,
+              xStart,
+              xEnd,
+              path: d,
+            });
+          }
+        }
+
+        let secOverlays = '';
+        if (chartSections) {
+          chartSections.forEach((s, i) => {
+            secOverlays += `<path class="ctx-chart-section-fill" data-idx="${i}" d="${s.path}" fill="#ddd6fe" fill-opacity="0"/>`;
+            secOverlays += `<rect class="ctx-chart-section-hit" data-idx="${i}" x="${s.xStart}" y="${pad.top}" width="${s.xEnd - s.xStart}" height="${plotH}" fill="transparent"/>`;
+          });
+        }
+
         html += `<div class="context-chart">`;
         html += `<svg viewBox="0 0 ${W} ${H}">`;
         html += gridLines;
         html += `<path d="${pathCtx}" fill="#e5e7eb" opacity="0.5"/>`;
         html += `<path d="${pathInput}" fill="#93c5fd" opacity="0.6"/>`;
         html += `<path d="${pathOutput}" fill="#c4b5fd" opacity="0.6"/>`;
+        html += secOverlays;
         html += `</svg>`;
         html += `<div class="context-chart-stats">`;
         html += `<span>${totalIn.toLocaleString()} in · ${totalOut.toLocaleString()} out</span>`;
@@ -1227,6 +1319,33 @@
       const exportButton = sessionView.querySelector('.export-btn');
       if (exportButton) {
         exportButton.addEventListener('click', () => exportStandalone(text, filename, exportButton));
+      }
+
+      // Context-chart per-section hover tooltip + highlight
+      if (chartSections && chartSections.length > 0) {
+        const placeChartTip = (ev) => {
+          tooltip.style.right = (window.innerWidth - ev.clientX + 12) + 'px';
+          tooltip.style.top = Math.min(ev.clientY, window.innerHeight - 100) + 'px';
+          tooltip.style.left = 'auto';
+        };
+        sessionView.querySelectorAll('.ctx-chart-section-hit').forEach((rect) => {
+          const idx = parseInt(rect.dataset.idx, 10);
+          const fill = sessionView.querySelector(`.ctx-chart-section-fill[data-idx="${idx}"]`);
+          const s = chartSections[idx];
+          rect.addEventListener('mouseenter', (ev) => {
+            if (fill) fill.setAttribute('fill-opacity', '0.75');
+            const turnLabel = s.turns === 1 ? 'turn' : 'turns';
+            tooltip.textContent =
+              `${s.title}\n${s.turns} ${turnLabel} · ${s.input.toLocaleString()} in · ${s.output.toLocaleString()} out\npeak ${s.peak.toLocaleString()} ctx`;
+            tooltip.style.display = 'block';
+            placeChartTip(ev);
+          });
+          rect.addEventListener('mousemove', placeChartTip);
+          rect.addEventListener('mouseleave', () => {
+            if (fill) fill.setAttribute('fill-opacity', '0');
+            tooltip.style.display = 'none';
+          });
+        });
       }
 
       // Clamp scroll: the more permissive of (a) last visible turn at viewport top
