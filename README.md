@@ -20,6 +20,14 @@ To annotate a session, open Claude Code **in this cloned directory** and ask it 
 
 Annotation only works when Claude Code is running inside the clone, because that's where the agent files live.
 
+## Export a standalone session
+
+```bash
+uv run transcripts --export ~/.claude/annotated-sessions/some-session.jsonl -o some-session.html
+```
+
+Writes a single self-contained HTML file with the session JSONL (and any annotation already present) inlined. Opens directly in a browser with no server — convenient for sharing a single session.
+
 ## Viewer-only without cloning
 
 ```bash

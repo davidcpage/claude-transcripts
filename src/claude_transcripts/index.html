@@ -606,8 +606,16 @@
       }
     }
 
-    searchInput.addEventListener('input', renderCards);
-    loadSessionList();
+    // Standalone mode: session data and optional annotation are inlined into
+    // the HTML via window.INLINE_SESSION. Skip the landing page and render
+    // immediately without touching the server.
+    if (window.INLINE_SESSION) {
+      landing.style.display = 'none';
+      renderSession(window.INLINE_SESSION.text, window.INLINE_SESSION.filename || 'session.jsonl');
+    } else {
+      searchInput.addEventListener('input', renderCards);
+      loadSessionList();
+    }
 
     // --- JSONL Parser ---
     function parseSession(text) {
@@ -896,7 +904,9 @@
 
       // Build HTML
       let html = '';
-      html += `<a class="back-link" onclick="showLanding()">\u2190</a>`;
+      if (!window.INLINE_SESSION) {
+        html += `<a class="back-link" onclick="showLanding()">\u2190</a>`;
+      }
       const displayTitle = (annotation && annotation.title) || meta.slug || filename;
       html += `<h1 class="title">${esc(displayTitle)}</h1>`;
 

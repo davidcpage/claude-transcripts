@@ -14,7 +14,19 @@ def main():
                         help="serve all raw sessions from ~/.claude/projects/")
     source.add_argument("--dir", type=Path, default=None,
                         help="serve sessions from a specific directory")
+    parser.add_argument("--export", type=Path, metavar="SESSION", default=None,
+                        help="export a single session as a standalone HTML file instead of serving")
+    parser.add_argument("-o", "--output", type=Path, default=None,
+                        help="output path for --export (default: <session-stem>.html in cwd)")
     args = parser.parse_args()
+
+    if args.export is not None:
+        from .export import export_session
+        session_path = args.export
+        output_path = args.output or Path.cwd() / f"{session_path.stem}.html"
+        result = export_session(session_path, output_path)
+        print(f"Wrote {result}")
+        return
 
     from .serve import run_server
     run_server(port=args.port, raw=args.raw, directory=args.dir)
