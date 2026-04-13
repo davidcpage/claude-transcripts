@@ -158,8 +158,9 @@
       text-overflow: ellipsis;
       background: #ffffff;
       border-top: 1px solid #ede9fe;
-      cursor: default;
+      cursor: pointer;
     }
+    #token-rail .rail-divider:hover { background: #f5f3ff; }
     #token-rail .rail-divider:first-child { border-top: none; }
     #token-rail .rail-section-wrap {
       position: relative;
@@ -1342,6 +1343,13 @@
           const divider = document.createElement('div');
           divider.className = 'rail-divider';
           divider.textContent = secDef.title;
+          divider.title = secDef.title + ' (click to expand/collapse)';
+          if (detailsEl) {
+            divider.addEventListener('click', () => {
+              detailsEl.open = !detailsEl.open;
+              window.scrollTo({ top: Math.max(0, window.scrollY + detailsEl.getBoundingClientRect().top - 16), behavior: 'auto' });
+            });
+          }
           container.appendChild(divider);
         }
 
