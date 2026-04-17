@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import urllib.parse
+import webbrowser
 from pathlib import Path
 
 from .search_index import SearchIndex
@@ -301,7 +302,7 @@ def _load_index_html() -> bytes:
 DEFAULT_PORT = 8080
 
 
-def run_server(port: int | None = None, raw: bool = False, directory: Path | None = None):
+def run_server(port: int | None = None, raw: bool = False, directory: Path | None = None, open_browser: bool = True):
     """Start the viewer HTTP server. Blocks until interrupted.
 
     When ``port`` is None the default port is tried first; if that port is
@@ -346,10 +347,13 @@ def run_server(port: int | None = None, raw: bool = False, directory: Path | Non
                 raise SystemExit(1)
         else:
             raise
+    url = f"http://localhost:{port}"
     print("Claude Code Session Viewer")
-    print(f"  http://localhost:{port}")
+    print(f"  {url}")
     print(f"  Serving {source_label}")
     print()
+    if open_browser:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

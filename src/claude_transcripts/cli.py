@@ -18,6 +18,8 @@ def main():
                         help="export a single session as a standalone HTML file instead of serving")
     parser.add_argument("-o", "--output", type=Path, default=None,
                         help="output path for --export (default: <session-stem>.html in cwd)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="don't open the viewer in a browser on startup")
     args = parser.parse_args()
 
     if args.export is not None:
@@ -29,7 +31,7 @@ def main():
         return
 
     from .serve import run_server
-    run_server(port=args.port, raw=args.raw, directory=args.dir)
+    run_server(port=args.port, raw=args.raw, directory=args.dir, open_browser=not args.no_browser)
 
 
 if __name__ == "__main__":
