@@ -36,6 +36,18 @@ uvx --from git+https://github.com/davidcpage/claude-transcripts transcripts --ra
 
 This runs the viewer ephemerally without cloning, against your raw sessions under `~/.claude/projects/`. It does **not** give you the annotation subagent — for that, use the clone-and-run path above.
 
+## Keep older sessions from being auto-deleted
+
+Claude Code removes old session logs under `~/.claude/projects/` after `cleanupPeriodDays` (default: 30). If you want to browse further-back sessions with the viewer, bump this to a large value in `~/.claude/settings.json`:
+
+```json
+{
+  "cleanupPeriodDays": 36500
+}
+```
+
+Annotated sessions under `~/.claude/annotated-sessions/` are not affected by this setting — only raw logs.
+
 ## Credits and related tools
 
 - The viewer's HTML display format was initially inspired by [hansonw's Codex session gist](https://gist.github.com/hansonw/db53a79e266310585024ab774f6a3845). The design has iterated since then, but the original shape and many specific details are still visible.
