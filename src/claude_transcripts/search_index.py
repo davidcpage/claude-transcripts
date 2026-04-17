@@ -2,18 +2,33 @@
 Lazy full-text index over user-turn text in Claude Code session .jsonl files.
 
 Each entry is keyed by absolute path with (mtime, size) as the freshness
-check. Cached to ~/.claude/transcripts-cache/search-index.json so rebuilds
-on startup reprocess only new or modified files; since session files are
-effectively append-only, steady-state rebuilds touch at most the active one.
+check. Cached to an OS-appropriate user cache dir so rebuilds on startup
+reprocess only new or modified files; since session files are effectively
+append-only, steady-state rebuilds touch at most the active one.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from pathlib import Path
 
-CACHE_DIR = Path.home() / ".claude" / "transcripts-cache"
+
+def _default_cache_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "claude-transcripts"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Local"
+        return root / "claude-transcripts" / "Cache"
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / "claude-transcripts"
+
+
+CACHE_DIR = _default_cache_dir()
 CACHE_FILE = CACHE_DIR / "search-index.json"
 CACHE_VERSION = 1
 
