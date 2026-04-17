@@ -440,6 +440,76 @@
       border-left: 2px solid #e9d5ff;
       padding-left: 14px;
     }
+
+    /* In-session search: floating pill (press "/" to open) */
+    #search-pill {
+      position: fixed;
+      top: 10px;
+      right: 20px;
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px 4px 10px;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      font-size: 13px;
+    }
+    #search-pill.open { display: flex; }
+    #search-pill input {
+      border: none;
+      outline: none;
+      width: 220px;
+      font-size: 13px;
+      padding: 2px 4px;
+      background: transparent;
+    }
+    #search-pill .search-counter {
+      color: #9ca3af;
+      font-size: 11px;
+      min-width: 48px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    #search-pill button {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      padding: 2px 6px;
+      color: #6b7280;
+      font-size: 13px;
+      line-height: 1;
+      border-radius: 3px;
+    }
+    #search-pill button:hover:not(:disabled) { background: #f3f4f6; color: #111827; }
+    #search-pill button:disabled { opacity: 0.35; cursor: default; }
+
+    /* Chrome-like highlight: yellow for all hits, orange for current. */
+    mark.search-hit {
+      background: #ffe066;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
+    }
+    mark.search-hit.current {
+      background: #ff9632;
+      outline: 1px solid #d97706;
+    }
+
+    /* Badge on collapsed annotated section headers */
+    .section-hit-badge {
+      display: inline-block;
+      background: #ffe066;
+      color: #7c2d12;
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 500;
+      margin-left: 8px;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -459,6 +529,13 @@
 
   <aside id="token-rail" aria-label="Token usage map"></aside>
   <div id="rail-tooltip" aria-hidden="true"></div>
+  <div id="search-pill" role="search" aria-hidden="true">
+    <input type="text" id="search-pill-input" placeholder="Find in user + assistant" autocomplete="off" spellcheck="false" />
+    <span class="search-counter" id="search-pill-counter"></span>
+    <button type="button" id="search-pill-prev" title="Previous (Shift+Enter)" aria-label="Previous match">&#9650;</button>
+    <button type="button" id="search-pill-next" title="Next (Enter)" aria-label="Next match">&#9660;</button>
+    <button type="button" id="search-pill-close" title="Close (Esc)" aria-label="Close">&times;</button>
+  </div>
   <main class="wrap" id="session-view"></main>
 
   <script>
@@ -470,6 +547,192 @@
     const searchInput = document.getElementById('search-input');
     const sessionCount = document.getElementById('session-count');
     const sessionCards = document.getElementById('session-cards');
+
+    // --- In-session find pill (press "/" to open, Esc to close) ---
+    // Scope is deliberately user + assistant. For tool/thinking content, use the
+    // browser's native Cmd+F — that's the value this pill is not trying to add.
+    const pill = document.getElementById('search-pill');
+    const pillInput = document.getElementById('search-pill-input');
+    const pillCounter = document.getElementById('search-pill-counter');
+    const pillPrev = document.getElementById('search-pill-prev');
+    const pillNext = document.getElementById('search-pill-next');
+    const pillClose = document.getElementById('search-pill-close');
+    let searchHits = [];
+    let searchCurrentIdx = -1;
+    let searchDebounce = null;
+
+    function openSearchPill() {
+      if (sessionView.style.display === 'none' || !sessionView.innerHTML) return;
+      pill.classList.add('open');
+      pill.setAttribute('aria-hidden', 'false');
+      pillInput.focus();
+      pillInput.select();
+    }
+
+    function closeSearchPill() {
+      pill.classList.remove('open');
+      pill.setAttribute('aria-hidden', 'true');
+      clearSearchHighlights();
+      searchHits = [];
+      searchCurrentIdx = -1;
+      pillInput.value = '';
+      updateSearchCounter();
+      updateSectionBadges();
+      updateNavButtons();
+    }
+
+    function clearSearchHighlights() {
+      sessionView.querySelectorAll('mark.search-hit').forEach(m => {
+        const parent = m.parentNode;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        parent.removeChild(m);
+        parent.normalize();
+      });
+    }
+
+    function highlightInContainer(root, query, ql) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          const p = node.parentNode;
+          if (p && p.nodeName === 'MARK' && p.classList && p.classList.contains('search-hit')) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const textNodes = [];
+      let n; while ((n = walker.nextNode())) textNodes.push(n);
+      const qLen = query.length;
+      textNodes.forEach(node => {
+        const text = node.nodeValue;
+        const tl = text.toLowerCase();
+        let idx, lastEnd = 0, anyHit = false;
+        const frags = document.createDocumentFragment();
+        while ((idx = tl.indexOf(ql, lastEnd)) !== -1) {
+          if (idx > lastEnd) frags.appendChild(document.createTextNode(text.slice(lastEnd, idx)));
+          const mark = document.createElement('mark');
+          mark.className = 'search-hit';
+          mark.textContent = text.slice(idx, idx + qLen);
+          frags.appendChild(mark);
+          lastEnd = idx + qLen;
+          anyHit = true;
+        }
+        if (anyHit) {
+          if (lastEnd < text.length) frags.appendChild(document.createTextNode(text.slice(lastEnd)));
+          node.parentNode.replaceChild(frags, node);
+        }
+      });
+    }
+
+    function runSearch() {
+      clearSearchHighlights();
+      searchHits = [];
+      searchCurrentIdx = -1;
+      const query = pillInput.value;
+      if (query) {
+        const containers = sessionView.querySelectorAll('section.block.user pre, section.block.assistant pre');
+        const ql = query.toLowerCase();
+        containers.forEach(c => highlightInContainer(c, query, ql));
+        searchHits = Array.from(sessionView.querySelectorAll('mark.search-hit'));
+        // No auto-jump: leave section-expansion state untouched. The badges +
+        // counter tell the reader where hits are; first Enter starts navigation.
+      }
+      updateSearchCounter();
+      updateSectionBadges();
+      updateNavButtons();
+    }
+
+    function markCurrentHit() {
+      searchHits.forEach((h, i) => h.classList.toggle('current', i === searchCurrentIdx));
+    }
+
+    function scrollCurrentIntoView() {
+      if (searchCurrentIdx < 0) return;
+      const el = searchHits[searchCurrentIdx];
+      let cur = el.parentNode;
+      while (cur && cur !== sessionView) {
+        if (cur.tagName === 'DETAILS' && !cur.open) cur.open = true;
+        cur = cur.parentNode;
+      }
+      const rect = el.getBoundingClientRect();
+      const y = window.scrollY + rect.top - window.innerHeight / 2;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'auto' });
+    }
+
+    function navigateHit(delta) {
+      if (searchHits.length === 0) return;
+      searchCurrentIdx = (searchCurrentIdx + delta + searchHits.length) % searchHits.length;
+      markCurrentHit();
+      scrollCurrentIntoView();
+      updateSearchCounter();
+    }
+
+    function updateSearchCounter() {
+      if (!pillInput.value) { pillCounter.textContent = ''; return; }
+      if (searchHits.length === 0) { pillCounter.textContent = 'No results'; return; }
+      if (searchCurrentIdx < 0) {
+        pillCounter.textContent = searchHits.length + ' match' + (searchHits.length === 1 ? '' : 'es');
+        return;
+      }
+      pillCounter.textContent = (searchCurrentIdx + 1) + ' / ' + searchHits.length;
+    }
+
+    function updateNavButtons() {
+      const disabled = searchHits.length === 0;
+      pillPrev.disabled = disabled;
+      pillNext.disabled = disabled;
+    }
+
+    function updateSectionBadges() {
+      sessionView.querySelectorAll('.section-hit-badge').forEach(b => b.remove());
+      if (searchHits.length === 0) return;
+      const counts = new Map();
+      searchHits.forEach(hit => {
+        const sec = hit.closest('details.section-group');
+        if (!sec) return;
+        counts.set(sec, (counts.get(sec) || 0) + 1);
+      });
+      counts.forEach((n, sec) => {
+        const divider = sec.querySelector('summary .section-divider');
+        if (!divider) return;
+        const badge = document.createElement('span');
+        badge.className = 'section-hit-badge';
+        badge.textContent = n + ' match' + (n === 1 ? '' : 'es');
+        divider.appendChild(badge);
+      });
+    }
+
+    pillInput.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(runSearch, 120);
+    });
+    pillInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        clearTimeout(searchDebounce);
+        if (searchHits.length === 0) runSearch();
+        navigateHit(ev.shiftKey ? -1 : 1);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeSearchPill();
+      }
+    });
+    pillPrev.addEventListener('click', () => { navigateHit(-1); pillInput.focus(); });
+    pillNext.addEventListener('click', () => { navigateHit(1); pillInput.focus(); });
+    pillClose.addEventListener('click', () => closeSearchPill());
+
+    // Global "/" to open the pill (ignored when user is already typing elsewhere)
+    document.addEventListener('keydown', (ev) => {
+      if (ev.defaultPrevented) return;
+      if (ev.key === '/' && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+        const t = ev.target;
+        const tag = (t && t.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+        if (sessionView.style.display !== 'none' && sessionView.innerHTML) {
+          ev.preventDefault();
+          openSearchPill();
+        }
+      }
+    });
 
     // Single scroll clamp handler — maxScrollY is updated by renderSession
     window._maxScrollY = Infinity;
@@ -486,6 +749,7 @@
     let serverSearchRequestId = 0;
 
     window.showLanding = function() {
+      closeSearchPill();
       sessionView.style.display = 'none';
       sessionView.innerHTML = '';
       rail.style.display = 'none';
@@ -1015,6 +1279,7 @@
 
     // --- Render session ---
     function renderSession(text, filename) {
+      closeSearchPill();
       const events = parseSession(text);
       const annotation = extractAnnotation(events);
       const merged = mergeEvents(events);
