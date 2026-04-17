@@ -11,10 +11,12 @@ streaming individual JSONL files. Three source modes:
 
 from __future__ import annotations
 
+import errno
 import http.server
 import importlib.resources
 import json
 import os
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -296,12 +298,23 @@ def _load_index_html() -> bytes:
     return (importlib.resources.files("claude_transcripts") / "index.html").read_bytes()
 
 
-def run_server(port: int = 8080, raw: bool = False, directory: Path | None = None):
-    """Start the viewer HTTP server. Blocks until interrupted."""
+DEFAULT_PORT = 8080
+
+
+def run_server(port: int | None = None, raw: bool = False, directory: Path | None = None):
+    """Start the viewer HTTP server. Blocks until interrupted.
+
+    When ``port`` is None the default port is tried first; if that port is
+    busy the OS picks a free one. An explicit port is never silently changed.
+    """
     global _SERVE_DIR, _MODE, _ALLOWED_DIRS
 
     if raw and directory:
         raise ValueError("--raw and --dir are mutually exclusive")
+
+    allow_fallback = port is None
+    if port is None:
+        port = DEFAULT_PORT
 
     if directory:
         _MODE = "dir"
@@ -319,7 +332,20 @@ def run_server(port: int = 8080, raw: bool = False, directory: Path | None = Non
         _ALLOWED_DIRS = [os.path.realpath(str(ANNOTATED_DIR))]
         source_label = f"annotated sessions from {ANNOTATED_DIR}"
 
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    try:
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            if allow_fallback:
+                print(f"Port {port} is in use — picking a free port instead.")
+                server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+                port = server.server_address[1]
+            else:
+                print(f"Port {port} is already in use.", file=sys.stderr)
+                print(f"Another process is listening there — stop it, or pick a different port with --port.", file=sys.stderr)
+                raise SystemExit(1)
+        else:
+            raise
     print("Claude Code Session Viewer")
     print(f"  http://localhost:{port}")
     print(f"  Serving {source_label}")

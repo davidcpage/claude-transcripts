@@ -7,8 +7,8 @@ def main():
         prog="transcripts",
         description="View Claude Code sessions",
     )
-    parser.add_argument("--port", type=int, default=8080,
-                        help="port to listen on (default: 8080)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="port to listen on (default: 8080, or an OS-assigned free port if 8080 is busy)")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--raw", action="store_true",
                         help="serve all raw sessions from ~/.claude/projects/")
