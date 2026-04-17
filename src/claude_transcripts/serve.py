@@ -18,6 +18,8 @@ import os
 import urllib.parse
 from pathlib import Path
 
+from .search_index import SearchIndex
+
 CLAUDE_BASE = Path.home() / ".claude"
 RAW_DIR = CLAUDE_BASE / "projects"
 ANNOTATED_DIR = CLAUDE_BASE / "annotated-sessions"
@@ -26,6 +28,7 @@ ANNOTATED_DIR = CLAUDE_BASE / "annotated-sessions"
 _SERVE_DIR: Path | None = None
 _MODE: str = "annotated"  # "annotated" | "raw" | "dir"
 _ALLOWED_DIRS: list[str] = []
+_SEARCH_INDEX: SearchIndex | None = None
 
 
 def _read_annotation(filepath: Path):
@@ -81,6 +84,17 @@ def _read_session_head(filepath: Path, max_lines: int = 30):
     return slug, date, preview
 
 
+def _annotation_summary(ann: dict) -> str:
+    """Flatten section titles + summaries into a single searchable blob."""
+    parts = []
+    for sec in ann.get("sections", []) or []:
+        if sec.get("title"):
+            parts.append(sec["title"])
+        if sec.get("summary"):
+            parts.append(sec["summary"])
+    return " ".join(parts)
+
+
 def _annotated_sessions(directory: Path):
     """List annotated sessions under a directory."""
     sessions = []
@@ -101,6 +115,7 @@ def _annotated_sessions(directory: Path):
             "slug": source.get("slug", "") or slug,
             "project": source.get("project", ""),
             "sections": len(ann.get("sections", [])),
+            "summary": _annotation_summary(ann),
             "model": ann.get("generated", {}).get("model", ""),
         })
     return sessions
@@ -152,6 +167,7 @@ def _dir_sessions(directory: Path):
                 "slug": source.get("slug", "") or slug,
                 "project": source.get("project", ""),
                 "sections": len(ann.get("sections", [])),
+                "summary": _annotation_summary(ann),
                 "model": ann.get("generated", {}).get("model", ""),
             })
         else:
@@ -181,6 +197,40 @@ def get_sessions():
     return sessions
 
 
+def _files_for_mode() -> list[Path]:
+    """Enumerate all indexable .jsonl paths for the active mode."""
+    files: list[Path] = []
+    if _MODE == "raw":
+        root = RAW_DIR
+        if root.exists():
+            for proj in root.iterdir():
+                if not proj.is_dir():
+                    continue
+                for f in proj.glob("*.jsonl"):
+                    if f.stem.endswith(".usage"):
+                        continue
+                    files.append(f)
+    else:
+        if _SERVE_DIR and _SERVE_DIR.exists():
+            for f in _SERVE_DIR.rglob("*.jsonl"):
+                if f.stem.endswith(".usage"):
+                    continue
+                files.append(f)
+    return files
+
+
+def _run_search(query: str) -> dict:
+    """Ensure the index is fresh for the active mode and return matches."""
+    global _SEARCH_INDEX
+    if _SEARCH_INDEX is None:
+        _SEARCH_INDEX = SearchIndex()
+    files = _files_for_mode()
+    rebuilt, elapsed = _SEARCH_INDEX.build(files)
+    if rebuilt:
+        print(f"  search index: processed {rebuilt} session(s) in {elapsed:.1f}s")
+    return _SEARCH_INDEX.search(query, files)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -189,6 +239,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/sessions":
             data = {"sessions": get_sessions()}
             body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/search":
+            qs = urllib.parse.parse_qs(parsed.query)
+            q = qs.get("q", [""])[0]
+            matches = _run_search(q) if q else {}
+            body = json.dumps({"matches": matches}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

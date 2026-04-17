@@ -324,6 +324,22 @@
       overflow: hidden;
       line-height: 1.4;
     }
+    .card-snippet {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 4px;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-snippet mark {
+      background: #fef3c7;
+      color: #92400e;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
     .card-meta {
       font-size: 12px;
       color: var(--muted);
@@ -464,6 +480,10 @@
     // --- Session data ---
     let allSessions = [];
     let serverMode = false;
+    let serverMatches = {};         // file path -> snippet (from /api/search)
+    let serverMatchesQuery = '';    // the freeText the snippets belong to
+    let serverSearchTimer = null;
+    let serverSearchRequestId = 0;
 
     window.showLanding = function() {
       sessionView.style.display = 'none';
@@ -526,8 +546,9 @@
           if (!s.date || s.date > operators.before) return false;
         }
         if (freeText) {
-          const hay = [s.title, s.author, s.project, s.slug, s.preview || '', ...(s.tags || [])].join(' ').toLowerCase();
-          if (!hay.includes(freeText)) return false;
+          const hay = [s.title, s.author, s.project, s.slug, s.preview || '', s.summary || '', ...(s.tags || [])].join(' ').toLowerCase();
+          const hasServerMatch = serverMatches[s.file] !== undefined;
+          if (!hay.includes(freeText) && !hasServerMatch) return false;
         }
         return true;
       });
@@ -539,6 +560,49 @@
         const d = new Date(dateStr + 'T00:00:00');
         return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       } catch { return dateStr; }
+    }
+
+    // --- Server-side full-text search over cached user-message index ---
+    function scheduleServerSearch() {
+      if (!serverMode) return;
+      clearTimeout(serverSearchTimer);
+      const { freeText } = parseQuery(searchInput.value);
+      if (!freeText) {
+        if (Object.keys(serverMatches).length) {
+          serverMatches = {};
+          serverMatchesQuery = '';
+          renderCards();
+        }
+        return;
+      }
+      serverSearchTimer = setTimeout(async () => {
+        const id = ++serverSearchRequestId;
+        try {
+          const r = await fetch('/api/search?q=' + encodeURIComponent(freeText));
+          const data = await r.json();
+          if (id !== serverSearchRequestId) return;  // a newer request superseded this one
+          serverMatches = data.matches || {};
+          serverMatchesQuery = freeText;
+          renderCards();
+        } catch { /* ignore — client-side filter still works */ }
+      }, 200);
+    }
+
+    // Wrap occurrences of query in <mark>, preserving HTML-safety.
+    function highlightMatch(text, query) {
+      if (!query) return esc(text);
+      const ql = query.toLowerCase();
+      const tl = text.toLowerCase();
+      let out = '';
+      let i = 0;
+      while (i < text.length) {
+        const idx = tl.indexOf(ql, i);
+        if (idx === -1) { out += esc(text.slice(i)); break; }
+        out += esc(text.slice(i, idx));
+        out += '<mark>' + esc(text.slice(idx, idx + ql.length)) + '</mark>';
+        i = idx + ql.length;
+      }
+      return out;
     }
 
     // --- Insert an operator into the search bar ---
@@ -571,7 +635,12 @@
         html += `<div class="card-title">${esc(s.title)}</div>`;
         html += `<div class="card-date">${formatDate(s.date)}</div>`;
         html += `</div>`;
-        if (s.preview) html += `<div class="card-preview">${esc(s.preview)}</div>`;
+        const snippet = serverMatches[s.file];
+        if (snippet) {
+          html += `<div class="card-snippet">${highlightMatch(snippet, serverMatchesQuery)}</div>`;
+        } else if (s.preview) {
+          html += `<div class="card-preview">${esc(s.preview)}</div>`;
+        }
         const metaParts = [];
         if (s.author) metaParts.push(`<span class="clickable" data-op="author" data-val="${esc(s.author)}">${esc(s.author)}</span>`);
         if (s.project) metaParts.push(`<span class="clickable" data-op="project" data-val="${esc(s.project)}">${esc(s.project)}</span>`);
@@ -673,7 +742,10 @@
       landing.style.display = 'none';
       renderSession(window.INLINE_SESSION.text, window.INLINE_SESSION.filename || 'session.jsonl');
     } else {
-      searchInput.addEventListener('input', renderCards);
+      searchInput.addEventListener('input', () => {
+        renderCards();
+        scheduleServerSearch();
+      });
       loadSessionList();
     }
 
